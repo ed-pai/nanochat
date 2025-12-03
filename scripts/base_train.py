@@ -116,6 +116,10 @@ with torch.device("meta"):
     model = GPT(model_config)
 model.to_empty(device=device)
 model.init_weights()
+# Freeze MLPs for this pretraining run
+for block in model.transformer.h:
+    for p in block.mlp.parameters():
+        p.requires_grad = False
 
 # If we are resuming, overwrite the model parameters with those of the checkpoint
 base_dir = get_base_dir()
@@ -157,7 +161,13 @@ print0(f"Total training FLOPs estimate: {num_flops_per_token * total_tokens:e}")
 
 # -----------------------------------------------------------------------------
 # Initialize the Optimizer (Muon for Linear layers, AdamW for embedding and lm_head)
-optimizers = model.setup_optimizers(unembedding_lr=unembedding_lr, embedding_lr=embedding_lr, matrix_lr=matrix_lr, weight_decay=weight_decay)
+optimizers = model.setup_optimizers(
+    unembedding_lr=unembedding_lr,
+    embedding_lr=embedding_lr,
+    matrix_lr=matrix_lr,
+    weight_decay=weight_decay,
+    exclude_mlp=True,
+)
 adamw_optimizer, muon_optimizer = optimizers
 
 if resuming:

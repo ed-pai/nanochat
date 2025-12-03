@@ -210,14 +210,21 @@ class GPT(nn.Module):
         num_flops_per_token = 6 * (nparams - nparams_embedding) + 12 * l * h * q * t
         return num_flops_per_token
 
-    def setup_optimizers(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02, weight_decay=0.0):
+    def setup_optimizers(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02, weight_decay=0.0, exclude_mlp=False):
         model_dim = self.config.n_embd
         ddp, rank, local_rank, world_size = get_dist_info()
-        # Separate out all parameters into 3 groups (matrix, embedding, lm_head)
-        matrix_params = list(self.transformer.h.parameters())
+        # Separate out parameters (optionally excluding MLPs from matrix params)
+        matrix_params, mlp_params = [], []
+        for block in self.transformer.h:
+            matrix_params.extend(list(block.attn.parameters()))
+            if exclude_mlp:
+                mlp_params.extend(list(block.mlp.parameters()))
+            else:
+                matrix_params.extend(list(block.mlp.parameters()))
         embedding_params = list(self.transformer.wte.parameters())
         lm_head_params = list(self.lm_head.parameters())
-        assert len(list(self.parameters())) == len(matrix_params) + len(embedding_params) + len(lm_head_params)
+        total_counted = len(matrix_params) + len(embedding_params) + len(lm_head_params) + len(mlp_params)
+        assert len(list(self.parameters())) == total_counted
         # Create the AdamW optimizer for the embedding and lm_head
         # Scale the LR for the AdamW parameters by ∝1/√dmodel (having tuned the LRs for 768 dim model)
         dmodel_lr_scale = (model_dim / 768) ** -0.5
