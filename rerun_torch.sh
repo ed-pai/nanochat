@@ -40,5 +40,3 @@ if ! [[ "$NODE_RANK" =~ ^[0-9]+$ ]]; then
 fi
 
 torchrun --nnodes=3 --node_rank=$NODE_RANK --rdzv_id=42 --rdzv_backend=c10d --rdzv_endpoint=192.168.127.6:29400 --nproc_per_node=$NPROC_PER_NODE -m scripts.base_train -- --depth=20 --run=$WANDB_RUN
-
-torchrun --nnodes=3 --node_rank=0 --rdzv_id=42 --rdzv_backend=c10d --rdzv_endpoint=192.168.127.6:29400 --nproc_per_node=8 -m scripts.base_train -- --depth=20 --run=dummy
