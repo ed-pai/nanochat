@@ -42,8 +42,8 @@ num_iterations = -1 # explicit number of steps of the optimization (-1 = disable
 target_flops = -1.0 # calculate num_iterations to reach target_flops. Useful for scaling laws experiments (-1 = disable)
 target_param_data_ratio = 20 # calculate num_iterations to maintain fixed data:param ratio (Chinchilla=20) (-1 = disable)
 # Optimization
-device_batch_size = 56 # per-device batch size (set to not OOM)
-total_batch_size = 917504 # total desired batch size, in #tokens
+device_batch_size = 64 # per-device batch size (set to not OOM)
+total_batch_size = 3145728 # total desired batch size, in #tokens
 embedding_lr = 0.2 # learning rate for the embedding parameters (Adam)
 unembedding_lr = 0.004 # learning rate for the unembedding parameters (Adam)
 weight_decay = 0.0 # weight decay for the embedding/unembedding parameters (Adam)
@@ -55,7 +55,7 @@ final_lr_frac = 0.0 # final LR is this fraction of the initial LR
 resume_from_step = -1 # resume training from this step of the optimization (-1 = disable)
 # Evaluation
 eval_every = 250 # every how many steps to evaluate the model for val bpb
-eval_tokens = 20*917504 # number of tokens to evaluate val loss on
+eval_tokens = 20*3145728 # number of tokens to evaluate val loss on
 core_metric_every = 2000 # every how many steps to evaluate the core metric (-1 = disable)
 core_metric_max_per_task = 500 # examples per task in estimating the core metric
 sample_every = 2000 # every how many steps to sample from the model
