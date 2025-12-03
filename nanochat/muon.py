@@ -110,6 +110,7 @@ class DistMuon(torch.optim.Optimizer):
         params = list(params)
         assert all(p.ndim == 2 for p in params), "Muon expects 2D parameters only"
         rank = dist.get_rank()
+        world_size = dist.get_world_size()
         # Group all parameters by their shape
         shapes = sorted({p.shape for p in params}) # sort to ensure consistent / deterministic ordering
         param_groups = []
@@ -120,7 +121,10 @@ class DistMuon(torch.optim.Optimizer):
             assert all(p.dtype == dtype for p in group_params)
             if rank == 0:
                 print(f"Muon: Grouping {len(group_params)} params of shape {shape}, device {device}, dtype {dtype}")
-            param_groups.append(dict(params=group_params, zero_buffer=torch.zeros_like(group_params[0])))
+            zero_buffer = torch.zeros_like(group_params[0])
+            # Use distinct padding buffers to avoid overlapping inputs to collectives when len(params) % world_size != 0
+            zero_pads = [torch.zeros_like(zero_buffer) for _ in range(world_size)]
+            param_groups.append(dict(params=group_params, zero_buffer=zero_buffer, zero_pads=zero_pads))
         super().__init__(param_groups, defaults)
 
     @torch.no_grad()
@@ -136,6 +140,7 @@ class DistMuon(torch.optim.Optimizer):
         for group in self.param_groups:
             params = group["params"]
             zero_buffer = group["zero_buffer"]
+            zero_pads = group["zero_pads"]
             # Go through params in groups of world_size.
             for base_i in range(0, len(params), world_size):
                 # The compute owner of each param is rank i % world_size
@@ -143,7 +148,7 @@ class DistMuon(torch.optim.Optimizer):
                 # each rank stacks up its chunk of world_size params into a list
                 rs_input = [p.grad for p in params[base_i:base_i + world_size]]
                 # pad rs_input with the zero buffer to complete the group
-                rs_input.extend([zero_buffer] * (world_size - len(rs_input)))
+                rs_input.extend(zero_pads[:world_size - len(rs_input)])
                 # the output buffer gets strided across the group based on the rank
                 rs_output = params[owner_idx].grad if owner_idx < len(params) else torch.empty_like(zero_buffer)
                 # reduce scatter the gradients within this group of world_size params
