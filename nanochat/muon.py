@@ -140,15 +140,16 @@ class DistMuon(torch.optim.Optimizer):
         for group in self.param_groups:
             params = group["params"]
             zero_buffer = group["zero_buffer"]
-            zero_pads = group["zero_pads"]
             # Go through params in groups of world_size.
             for base_i in range(0, len(params), world_size):
                 # The compute owner of each param is rank i % world_size
                 owner_idx = base_i + rank
                 # each rank stacks up its chunk of world_size params into a list
                 rs_input = [p.grad for p in params[base_i:base_i + world_size]]
-                # pad rs_input with the zero buffer to complete the group
-                rs_input.extend(zero_pads[:world_size - len(rs_input)])
+                # pad rs_input with distinct zero buffers to avoid overlapping NCCL inputs
+                pad = world_size - len(rs_input)
+                if pad:
+                    rs_input.extend(torch.zeros_like(zero_buffer) for _ in range(pad))
                 # the output buffer gets strided across the group based on the rank
                 rs_output = params[owner_idx].grad if owner_idx < len(params) else torch.empty_like(zero_buffer)
                 # reduce scatter the gradients within this group of world_size params
