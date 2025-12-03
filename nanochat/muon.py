@@ -2,7 +2,6 @@
 Muon optimizer from Keller et al.
 Also a lot of borrowing of ideas from modded-nanogpt.
 """
-import os
 import torch
 from torch import Tensor
 import torch.distributed as dist
@@ -111,7 +110,6 @@ class DistMuon(torch.optim.Optimizer):
         params = list(params)
         assert all(p.ndim == 2 for p in params), "Muon expects 2D parameters only"
         rank = dist.get_rank()
-        world_size = dist.get_world_size()
         # Group all parameters by their shape
         shapes = sorted({p.shape for p in params}) # sort to ensure consistent / deterministic ordering
         param_groups = []
@@ -122,33 +120,13 @@ class DistMuon(torch.optim.Optimizer):
             assert all(p.dtype == dtype for p in group_params)
             if rank == 0:
                 print(f"Muon: Grouping {len(group_params)} params of shape {shape}, device {device}, dtype {dtype}")
-            zero_buffer = torch.zeros_like(group_params[0])
-            # Use distinct padding buffers to avoid overlapping inputs to collectives when len(params) % world_size != 0
-            zero_pads = [torch.zeros_like(zero_buffer) for _ in range(world_size)]
-            param_groups.append(dict(params=group_params, zero_buffer=zero_buffer, zero_pads=zero_pads))
+            param_groups.append(dict(params=group_params, zero_buffer=torch.zeros_like(group_params[0])))
         super().__init__(param_groups, defaults)
 
     @torch.no_grad()
     def step(self):
         rank = dist.get_rank()
         world_size = dist.get_world_size()
-        if os.environ.get("MUON_ALLREDUCE", "0") == "1":
-            # Simpler path: average grads via all_reduce on every rank and update locally.
-            for group in self.param_groups:
-                params = group["params"]
-                for p in params:
-                    g = p.grad
-                    dist.all_reduce(g, op=dist.ReduceOp.AVG)
-                    state = self.state[p]
-                    if "momentum_buffer" not in state:
-                        state["momentum_buffer"] = torch.zeros_like(g)
-                    buf: Tensor = state["momentum_buffer"]
-                    buf.lerp_(g, 1.0 - group["momentum"])
-                    g = g.lerp_(buf, group["momentum"]) if group["nesterov"] else buf
-                    g = zeropower_via_newtonschulz5(g, steps=group["ns_steps"])
-                    scale = (max(1.0, p.size(-2) / p.size(-1)) ** 0.5)
-                    p.add_(g, alpha=-group["lr"] * scale)
-            return
 
         # Ensure all grads exist
         assert all(p.grad is not None for group in self.param_groups for p in group["params"]), "All params must have grads"
@@ -164,10 +142,8 @@ class DistMuon(torch.optim.Optimizer):
                 owner_idx = base_i + rank
                 # each rank stacks up its chunk of world_size params into a list
                 rs_input = [p.grad for p in params[base_i:base_i + world_size]]
-                # pad rs_input with distinct zero buffers to avoid overlapping NCCL inputs
-                pad = world_size - len(rs_input)
-                if pad:
-                    rs_input.extend(torch.zeros_like(zero_buffer) for _ in range(pad))
+                # pad rs_input with the zero buffer to complete the group
+                rs_input.extend([zero_buffer] * (world_size - len(rs_input)))
                 # the output buffer gets strided across the group based on the rank
                 rs_output = params[owner_idx].grad if owner_idx < len(params) else torch.empty_like(zero_buffer)
                 # reduce scatter the gradients within this group of world_size params
