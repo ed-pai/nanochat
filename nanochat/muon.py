@@ -2,6 +2,7 @@
 Muon optimizer from Keller et al.
 Also a lot of borrowing of ideas from modded-nanogpt.
 """
+import os
 import torch
 from torch import Tensor
 import torch.distributed as dist
@@ -131,6 +132,23 @@ class DistMuon(torch.optim.Optimizer):
     def step(self):
         rank = dist.get_rank()
         world_size = dist.get_world_size()
+        if os.environ.get("MUON_ALLREDUCE", "0") == "1":
+            # Simpler path: average grads via all_reduce on every rank and update locally.
+            for group in self.param_groups:
+                params = group["params"]
+                for p in params:
+                    g = p.grad
+                    dist.all_reduce(g, op=dist.ReduceOp.AVG)
+                    state = self.state[p]
+                    if "momentum_buffer" not in state:
+                        state["momentum_buffer"] = torch.zeros_like(g)
+                    buf: Tensor = state["momentum_buffer"]
+                    buf.lerp_(g, 1.0 - group["momentum"])
+                    g = g.lerp_(buf, group["momentum"]) if group["nesterov"] else buf
+                    g = zeropower_via_newtonschulz5(g, steps=group["ns_steps"])
+                    scale = (max(1.0, p.size(-2) / p.size(-1)) ** 0.5)
+                    p.add_(g, alpha=-group["lr"] * scale)
+            return
 
         # Ensure all grads exist
         assert all(p.grad is not None for group in self.param_groups for p in group["params"]), "All params must have grads"
